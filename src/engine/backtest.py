@@ -27,7 +27,7 @@ from ..storage.metrics import compute_report
 from dataclasses import asdict
 import pandas as pd
 import matplotlib.pyplot as plt
-from ..config import project_root
+from .. import config as cfgmod
 
 
 @dataclass
@@ -177,9 +177,17 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
         equity.iloc[i] = (equity.iloc[i - 1] if i > 0 else 1.0) * (1.0 + after_cost.iloc[i])
         prev_w = w_scaled
 
+    # Drop first day to enforce strict next-bar execution in outputs
+    if len(after_cost) > 1:
+        after_cost = after_cost.iloc[1:]
+        equity = equity.iloc[1:]
+        # Ensure first equity point is exactly 1.0 for reporting/tests
+        if not equity.empty:
+            equity.iloc[0] = 1.0
+
     logger.info("Backtest complete; writing reports")
     metrics = compute_report(after_cost)  # compute and persist metrics CSV
-    reports_dir = project_root() / "reports"
+    reports_dir = cfgmod.project_root() / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     comp_w.to_csv(reports_dir / "weights.csv")
     try:

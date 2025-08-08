@@ -13,7 +13,14 @@ DB_PATH = project_root() / "db" / "trading_bot.sqlite"
 def get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA journal_mode=WAL;")
+    # Use WAL for durability in production; prefer DELETE for ephemeral test DBs
+    try:
+        if "test" in DB_PATH.name.lower():
+            conn.execute("PRAGMA journal_mode=DELETE;")
+        else:
+            conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
     return conn
 
 
