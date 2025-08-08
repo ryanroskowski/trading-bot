@@ -34,7 +34,7 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data:ro
-      - ./db:/app/db:ro
+      - ./db:/app/db
       - ./reports:/app/reports:ro
       - ./logs:/app/logs:ro
       - ./.env:/app/.env:ro
@@ -63,7 +63,7 @@ services:
       - "8000:8000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - ./db:/app/db:ro
+      - ./db:/app/db
       - ./.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
