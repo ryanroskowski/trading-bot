@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+import time
+import random
 
 import pandas as pd
 import yfinance as yf
@@ -13,21 +15,185 @@ class PriceData:
     open: pd.DataFrame
 
 
-def fetch_yf_ohlcv(tickers: List[str], start: str = "2005-01-01", end: Optional[str] = None) -> PriceData:
-    data = yf.download(tickers=tickers, start=start, end=end, auto_adjust=False, progress=False, group_by="ticker")
+def fetch_yf_ohlcv_direct_api(tickers: List[str], start: str = "2005-01-01", end: Optional[str] = None) -> PriceData:
+    """
+    Fetch OHLCV data directly from Yahoo Finance API, bypassing yfinance library.
+    This avoids the rate limiting issues that yfinance sometimes encounters.
+    """
+    import requests
+    import json
+    from datetime import datetime
+    
+    def date_to_timestamp(date_str: str) -> int:
+        """Convert date string to Unix timestamp."""
+        dt = pd.to_datetime(date_str)
+        return int(dt.timestamp())
+    
+    start_ts = date_to_timestamp(start)
+    end_ts = date_to_timestamp(end) if end else int(datetime.now().timestamp())
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    
+    all_close_data = {}
+    all_open_data = {}
+    
+    for ticker in tickers:
+        try:
+            print(f"Fetching {ticker}...")
+            
+            # Use Yahoo Finance Chart API directly
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker
+            params = {
+                'period1': start_ts,
+                'period2': end_ts,
+                'interval': '1d',
+                'includePrePost': 'false',
+                'events': 'div,splits'
+            }
+            
+            response = session.get(url, params=params, timeout=10)
+            
+            if response.status_code != 200:
+                print(f"Failed to fetch {ticker}: HTTP {response.status_code}")
+                continue
+                
+            data = response.json()
+            
+            if 'chart' not in data or not data['chart']['result']:
+                print(f"No chart data for {ticker}")
+                continue
+                
+            result = data['chart']['result'][0]
+            
+            if 'timestamp' not in result or not result['timestamp']:
+                print(f"No timestamp data for {ticker}")
+                continue
+                
+            timestamps = result['timestamp']
+            quotes = result['indicators']['quote'][0]
+            
+            # Check if we have required OHLC data
+            if not all(key in quotes for key in ['open', 'high', 'low', 'close']):
+                print(f"Missing OHLC data for {ticker}")
+                continue
+            
+            # Convert timestamps to datetime index
+            dates = pd.to_datetime(timestamps, unit='s').tz_localize('UTC').tz_convert('America/New_York').tz_localize(None)
+            
+            # Extract OHLC data
+            opens = quotes['open']
+            closes = quotes['close']
+            
+            # Handle adjusted close if available
+            if 'adjclose' in result['indicators']:
+                adj_closes = result['indicators']['adjclose'][0]['adjclose']
+            else:
+                adj_closes = closes
+            
+            # Create series, handling None values
+            open_series = pd.Series(opens, index=dates).dropna()
+            close_series = pd.Series(adj_closes, index=dates).dropna()
+            
+            if len(open_series) > 0 and len(close_series) > 0:
+                all_open_data[ticker] = open_series
+                all_close_data[ticker] = close_series
+                print(f"Successfully fetched {len(close_series)} days for {ticker}")
+            else:
+                print(f"No valid data after cleaning for {ticker}")
+                
+            # Add small delay between requests
+            time.sleep(0.5 + random.uniform(0, 0.5))
+            
+        except Exception as e:
+            print(f"Error fetching {ticker}: {e}")
+            continue
+    
+    if not all_close_data:
+        raise RuntimeError(f"Failed to fetch data for any of the requested tickers: {tickers}")
+    
+    # Combine into DataFrames
+    close_df = pd.DataFrame(all_close_data).sort_index()
+    open_df = pd.DataFrame(all_open_data).sort_index()
+    
+    print(f"Successfully fetched data for {len(all_close_data)} tickers")
+    print(f"Date range: {close_df.index[0]} to {close_df.index[-1]}")
+    print(f"Shape: {close_df.shape}")
+    
+    return PriceData(close=close_df, open=open_df)
 
-    # yfinance returns a Panel-like MultiIndex; normalize to DataFrames
-    frames_close = {}
-    frames_open = {}
-    for t in tickers:
-        df = data[t] if isinstance(data.columns, pd.MultiIndex) else data
-        frames_close[t] = df["Adj Close"].rename(t)
-        frames_open[t] = df["Open"].rename(t)
-    close = pd.concat(frames_close.values(), axis=1).sort_index()
-    open_ = pd.concat(frames_open.values(), axis=1).sort_index()
-    close.index = pd.DatetimeIndex(close.index).tz_localize(None)
-    open_.index = pd.DatetimeIndex(open_.index).tz_localize(None)
-    return PriceData(close=close, open=open_)
+
+def fetch_yf_ohlcv(tickers: List[str], start: str = "2005-01-01", end: Optional[str] = None) -> PriceData:
+    """
+    Fetch OHLCV data from Yahoo Finance. First tries direct API, falls back to yfinance library.
+    """
+    try:
+        print("Attempting direct Yahoo Finance API...")
+        return fetch_yf_ohlcv_direct_api(tickers, start, end)
+    except Exception as e:
+        print(f"Direct API failed: {e}")
+        print("Falling back to yfinance library...")
+        
+        # Fallback to original yfinance approach with conservative settings
+        try:
+            print(f"Fetching data for {len(tickers)} tickers using yfinance...")
+            data = yf.download(
+                tickers=tickers, 
+                start=start, 
+                end=end, 
+                auto_adjust=False, 
+                progress=False, 
+                group_by="ticker" if len(tickers) > 1 else None
+            )
+            
+            if data.empty:
+                raise RuntimeError("yfinance returned empty data")
+            
+            # Process the data
+            frames_close = {}
+            frames_open = {}
+            
+            for t in tickers:
+                try:
+                    if len(tickers) == 1:
+                        df = data
+                    else:
+                        if isinstance(data.columns, pd.MultiIndex) and t in data.columns.get_level_values(0):
+                            df = data[t]
+                        else:
+                            continue
+                    
+                    if 'Adj Close' in df.columns and 'Open' in df.columns:
+                        close_series = df["Adj Close"].dropna()
+                        open_series = df["Open"].dropna()
+                        
+                        if len(close_series) > 0 and len(open_series) > 0:
+                            frames_close[t] = close_series.rename(t)
+                            frames_open[t] = open_series.rename(t)
+                            
+                except Exception as e:
+                    print(f"Error processing {t}: {e}")
+                    continue
+            
+            if not frames_close:
+                raise RuntimeError("No valid data extracted from yfinance")
+            
+            close = pd.concat(frames_close.values(), axis=1).sort_index()
+            open_ = pd.concat(frames_open.values(), axis=1).sort_index()
+            
+            # Clean timezone
+            close.index = pd.DatetimeIndex(close.index).tz_localize(None)
+            open_.index = pd.DatetimeIndex(open_.index).tz_localize(None)
+            
+            print(f"yfinance fallback successful: {close.shape}")
+            return PriceData(close=close, open=open_)
+            
+        except Exception as yf_error:
+            raise RuntimeError(f"Both direct API and yfinance failed. "
+                             f"Direct API error: {e}. yfinance error: {yf_error}")
+
 
 
 def align_next_bar_execution(signals: pd.DataFrame, open_prices: pd.DataFrame) -> pd.DataFrame:
