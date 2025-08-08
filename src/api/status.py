@@ -242,19 +242,44 @@ def targets():
                 """,
                 conn
             )
+            meta_df = pd.read_sql_query(
+                """
+                SELECT ts, strategy, weight FROM meta_targets
+                WHERE ts = (SELECT MAX(ts) FROM meta_targets)
+                ORDER BY strategy
+                """,
+                conn
+            )
+            strat_df = pd.read_sql_query(
+                """
+                SELECT ts, strategy, symbol, weight FROM strategy_targets
+                WHERE ts = (SELECT MAX(ts) FROM strategy_targets)
+                ORDER BY strategy, symbol
+                """,
+                conn
+            )
         if df.empty:
             return {
                 "target_weights": {},
                 "computation_time": None,
                 "timestamp": datetime.datetime.now().isoformat(),
-                "note": "No targets available yet"
+                "note": "No targets available yet",
+                "meta_weights": {},
+                "per_strategy_targets": {}
             }
         ts = df['ts'].iloc[0]
         weights = {row['symbol']: float(row['weight']) for _, row in df.iterrows()}
+        meta_weights = {row['strategy']: float(row['weight']) for _, row in meta_df.iterrows()} if not meta_df.empty else {}
+        per_strategy_targets = {}
+        if not strat_df.empty:
+            for strat, grp in strat_df.groupby('strategy'):
+                per_strategy_targets[strat] = {row['symbol']: float(row['weight']) for _, row in grp.iterrows()}
         return {
             "target_weights": weights,
             "computation_time": ts,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.datetime.now().isoformat(),
+            "meta_weights": meta_weights,
+            "per_strategy_targets": per_strategy_targets
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

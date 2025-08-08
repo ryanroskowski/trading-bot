@@ -26,6 +26,8 @@ from ..utils.risk import (
 from ..storage.metrics import compute_report
 from dataclasses import asdict
 import pandas as pd
+import json
+import hashlib
 import matplotlib.pyplot as plt
 from .. import config as cfgmod
 
@@ -199,6 +201,30 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
     # Metrics CSV
     try:
         pd.DataFrame([asdict(metrics)]).to_csv(reports_dir / "metrics.csv", index=False)
+    except Exception:
+        pass
+
+    # Repro metadata (commit hash if available, config sha256)
+    try:
+        try:
+            import subprocess
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(cfgmod.project_root())).decode().strip()
+        except Exception:
+            commit = None
+        cfg_text = None
+        try:
+            with open(cfg_path or str(cfgmod.project_root() / "config.yaml"), "rb") as f:
+                data = f.read()
+                cfg_text = hashlib.sha256(data).hexdigest()
+        except Exception:
+            pass
+        run_info = {
+            "git_commit": commit,
+            "config_sha256": cfg_text,
+            "generated_at": pd.Timestamp.utcnow().isoformat(),
+        }
+        with open(reports_dir / "run_info.json", "w", encoding="utf-8") as f:
+            json.dump(run_info, f, indent=2)
     except Exception:
         pass
     # Charts

@@ -28,7 +28,14 @@ from ..utils.risk import (
     apply_drawdown_derisking,
     pdt_guard,
 )
-from ..storage.db import init_db, insert_equity, insert_targets
+from ..storage.db import (
+    init_db,
+    insert_equity,
+    insert_targets,
+    insert_meta_targets,
+    insert_strategy_targets,
+    insert_runtime_status,
+)
 
 
 @dataclass
@@ -423,9 +430,14 @@ def run_live_loop() -> None:
             except Exception as e:
                 logger.warning(f"Equity persistence failed: {e}")
 
-            # Persist last computed target weights for API/dashboard visibility
+            # Persist last computed target weights and diagnostics for API/dashboard visibility
             try:
-                insert_targets(pd.Timestamp.utcnow().isoformat(), target)
+                ts_now = pd.Timestamp.utcnow().isoformat()
+                insert_targets(ts_now, target)
+                if meta:
+                    insert_meta_targets(ts_now, meta_weights if 'meta_weights' in locals() else {})
+                insert_strategy_targets(ts_now, {name: w.iloc[-1] for name, w in strat_weights.items()})
+                insert_runtime_status(ts_now, ctx.pdt_trades_today, ctx.circuit_breaker_active)
             except Exception as e:
                 logger.warning(f"Target weights persistence failed: {e}")
             

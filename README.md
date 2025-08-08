@@ -73,6 +73,7 @@ Computes EWMA Sharpe over lookbacks [63, 126, 252] days with weights [0.5, 0.3, 
 - Next-bar execution and after-cost results (slippage + commissions)
 - Reports written to `reports/`
 - Metrics include CAGR, Sharpe, Sortino, Calmar, Max/Longest DD, exposure, turnover, DSR, and PSR
+- After each run, see `reports/metrics.csv` and `reports/run_info.json` (contains git commit and config hash)
 
 Sample after-cost backtest (illustrative):
 
@@ -82,6 +83,12 @@ Sample after-cost backtest (illustrative):
 | TSMOM-L          | 8%   | 0.80   | 1.10    | -18%  | 0.44   |
 | QV-Trend         | 9%   | 0.75   | 1.05    | -20%  | 0.45   |
 | Ensemble (Meta)  | 11%  | 1.00   | 1.35    | -12%  | 0.92   |
+
+Example `reports/metrics.csv` (sample):
+
+| cagr | sharpe | sortino | calmar | max_dd | longest_dd_days |
+|------|--------|---------|--------|--------|------------------|
+| 0.11 | 1.02   | 1.35    | 0.92   | -0.12  | 85               |
 
 Note: 2025 whipsaw conditions challenge pure trend-following. The meta-allocator plus drawdown de-risking targets reduce regime pain by tilting to sturdier sleeves and lowering target volatility during stress.
 

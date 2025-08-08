@@ -307,11 +307,36 @@ elif page == "Performance Metrics":
         except Exception as e:
             st.error(f"Failed to load metrics: {e}")
 
-    st.subheader("Live Target Weights (Latest)")
+    st.subheader("Live Targets & Signals (Latest)")
     targets_data = get_api_data("/targets")
     if "target_weights" in targets_data and targets_data["target_weights"]:
-        tdf = pd.DataFrame(list(targets_data["target_weights"].items()), columns=["Symbol", "Weight"]).set_index("Symbol")
-        st.bar_chart(tdf)
+        lw_col, mw_col = st.columns(2)
+        with lw_col:
+            st.caption("Composite Target Weights")
+            tdf = pd.DataFrame(list(targets_data["target_weights"].items()), columns=["Symbol", "Weight"]).set_index("Symbol")
+            st.bar_chart(tdf)
+        with mw_col:
+            st.caption("Meta Weights by Strategy")
+            mw = targets_data.get("meta_weights", {})
+            if mw:
+                mw_df = pd.DataFrame(list(mw.items()), columns=["Strategy", "Weight"]).set_index("Strategy")
+                st.bar_chart(mw_df)
+            else:
+                st.info("No meta weights yet.")
+
+        # Per-strategy targets snapshot table
+        st.caption("Per-Strategy Per-Symbol Targets")
+        pst = targets_data.get("per_strategy_targets", {})
+        if pst:
+            # Flatten into a display-friendly dataframe
+            rows = []
+            for strat, sym_map in pst.items():
+                for sym, w in sym_map.items():
+                    rows.append({"Strategy": strat, "Symbol": sym, "Weight": w})
+            pst_df = pd.DataFrame(rows)
+            st.dataframe(pst_df.sort_values(["Strategy", "Symbol"]))
+        else:
+            st.info("No per-strategy targets yet.")
     else:
         st.info("No live targets available yet.")
 
@@ -342,6 +367,21 @@ elif page == "System Status":
             st.success("✅ Database Connected")
         except Exception as e:
             st.error(f"❌ Database Error: {e}")
+
+    # Live runtime status banner (PDT and circuit breakers)
+    try:
+        with get_conn() as conn:
+            rtd = pd.read_sql_query(
+                "SELECT ts, pdt_trades_today, circuit_breaker_active FROM runtime_status ORDER BY ts DESC LIMIT 1",
+                conn
+            )
+        if not rtd.empty:
+            last = rtd.iloc[0]
+            if int(last["circuit_breaker_active"]) == 1:
+                st.error("🚨 CIRCUIT BREAKER ACTIVE — Trading Paused")
+            st.info(f"PDT trades today: {int(last['pdt_trades_today'])}")
+    except Exception as e:
+        st.warning(f"Runtime status unavailable: {e}")
     
     # Kill switch controls
     st.subheader("Emergency Controls")
