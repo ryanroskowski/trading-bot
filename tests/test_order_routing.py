@@ -206,13 +206,8 @@ class TestOrderRouting:
         mock_alpaca = Mock(spec=AlpacaConnector)
 
         _, submitted = reconcile_and_route(target_weights, last_prices, ctx, alpaca=mock_alpaca, timestamp='2023-01-01T12:00:01')
-        # 1000$ * 1.0 / 100 = 10 target qty; open buy has 7 remaining -> effective delta 3? wait compute:
-        # delta = 10 - 0 = 10; working_buy=7; working_sell=0; effective=10-7=3
-        # But our expectation is to submit remaining 7 only if target was 10 and 3 filled already.
-        # However, the algorithm reduces by working (remaining) quantity, so submission should be 3.
-        # Adjust expectation accordingly.
-        # submitted dict contains the actual submitted delta; ensure <= 3.0 within tolerance
-        assert abs(submitted.get('SPY', 0.0)) <= 3.0001
+        # 1000$ * 1.0 / 100 = 10 target qty; filled=3 so remaining needed is 7
+        assert abs(submitted.get('SPY', 0.0) - 7.0) < 1e-6
 
     @patch('src.execution.order_router.get_open_orders')
     @patch('src.execution.order_router.get_current_positions')
@@ -235,7 +230,7 @@ class TestOrderRouting:
         results, submitted = reconcile_and_route(target_weights, last_prices, ctx, alpaca=mock_alpaca, timestamp='2023-01-01T12:01:00')
         # No orders submitted due to direction flip cancel-first policy
         assert submitted == {}
-        mock_submit.assert_called_once()  # submit called with empty deltas internally results in no orders
+        mock_submit.assert_not_called()
 
 
 class TestOrderRoutingEdgeCases:

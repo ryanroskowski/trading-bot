@@ -230,6 +230,11 @@ def reconcile_and_route(
         alpaca = AlpacaConnector()
     
     logger.info(f"Starting order reconciliation at {timestamp}")
+    # Ensure DB schema exists before any helper reads
+    try:
+        init_db()
+    except Exception:
+        pass
     
     # Step 1: Get current positions
     current_positions = get_current_positions()
@@ -242,27 +247,32 @@ def reconcile_and_route(
     # Step 2.5: Partial-fill reconciliation and open orders consideration
     open_orders = get_open_orders()
     recent_fills = get_recent_fills(since_minutes=60)
-    open_by_symbol = {}
+    open_by_symbol: Dict[str, dict] = {}
     for o in open_orders:
         sym = o["symbol"]
-        s = open_by_symbol.setdefault(sym, {"buy": [], "sell": []})
+        s = open_by_symbol.setdefault(sym, {"buy": [], "sell": [], "buy_filled": 0.0, "sell_filled": 0.0})
         side = (o.get("side") or "").lower()
         filled_qty = float(o.get("filled_qty") or 0.0)
         qty = float(o.get("qty") or 0.0)
         rem = max(0.0, qty - filled_qty)
         if side == "buy":
             s["buy"].append(rem)
+            s["buy_filled"] += max(0.0, filled_qty)
         elif side == "sell":
             s["sell"].append(rem)
+            s["sell_filled"] += max(0.0, abs(filled_qty))
 
     effective_deltas: Dict[str, float] = {}
     for sym, delta in deltas.items():
         working_buy = sum(open_by_symbol.get(sym, {}).get("buy", []))
         working_sell = sum(open_by_symbol.get(sym, {}).get("sell", []))
-        eff = delta - working_buy + working_sell
+        # Use filled quantities to reconcile partial fills explicitly
+        filled_buy = float(open_by_symbol.get(sym, {}).get("buy_filled", 0.0))
+        filled_sell = float(open_by_symbol.get(sym, {}).get("sell_filled", 0.0))
+        eff = delta - filled_buy + filled_sell
         logger.info(
             f"partial_reconcile: symbol={sym}, delta={delta:.6f}, working_buy={working_buy:.6f}, "
-            f"working_sell={working_sell:.6f}, effective={eff:.6f}"
+            f"working_sell={working_sell:.6f}, filled_buy={filled_buy:.6f}, filled_sell={filled_sell:.6f}, effective={eff:.6f}"
         )
         effective_deltas[sym] = eff
 
