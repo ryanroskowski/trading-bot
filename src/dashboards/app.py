@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import requests
 from typing import Dict, List, Any
 
@@ -41,11 +42,14 @@ page = st.sidebar.selectbox("Select Page", [
 ])
 
 # Helper functions
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
+
 @st.cache_data(ttl=30)
 def get_api_data(endpoint: str) -> Dict[str, Any]:
     """Get data from the API with caching."""
     try:
-        response = requests.get(f"http://localhost:8000{endpoint}", timeout=5)
+        response = requests.get(f"{API_BASE_URL}{endpoint}", timeout=5)
         if response.status_code == 200:
             return response.json()
         else:
@@ -57,6 +61,10 @@ def get_api_data(endpoint: str) -> Dict[str, Any]:
 def load_equity_from_db():
     """Load equity data directly from database."""
     try:
+        # If DB file doesn't exist yet (read-only mount in dashboard), skip
+        db_path = project_root() / "db" / "trading_bot.sqlite"
+        if not db_path.exists():
+            return pd.DataFrame()
         with get_conn() as conn:
             df = pd.read_sql_query("SELECT ts, value FROM equity ORDER BY ts", conn, parse_dates=["ts"])
         return df

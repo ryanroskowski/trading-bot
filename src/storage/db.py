@@ -12,17 +12,30 @@ DB_PATH = project_root() / "db" / "trading_bot.sqlite"
 
 
 def get_conn() -> sqlite3.Connection:
+    """Open a SQLite connection.
+
+    - Default: read/write connection (WAL for durability).
+    - Fallback: read-only connection when running in environments with a read-only
+      DB mount (e.g., dashboard service uses :ro).
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    # Use WAL for durability in production; prefer DELETE for ephemeral test DBs
     try:
-        if "test" in DB_PATH.name.lower():
-            conn.execute("PRAGMA journal_mode=DELETE;")
-        else:
-            conn.execute("PRAGMA journal_mode=WAL;")
-    except Exception:
-        pass
-    return conn
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            # Use WAL for durability in production; prefer DELETE for ephemeral test DBs
+            if "test" in DB_PATH.name.lower():
+                conn.execute("PRAGMA journal_mode=DELETE;")
+            else:
+                conn.execute("PRAGMA journal_mode=WAL;")
+        except Exception:
+            pass
+        return conn
+    except sqlite3.OperationalError:
+        # Read-only fallback
+        try:
+            return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        except Exception:
+            raise
 
 
 def init_db() -> None:
