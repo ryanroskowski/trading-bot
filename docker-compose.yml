@@ -39,6 +39,8 @@ services:
       - ./logs:/app/logs:ro
       - ./.env:/app/.env:ro
     restart: unless-stopped
+    environment:
+      - PYTHONPATH=/app
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
       interval: 30s

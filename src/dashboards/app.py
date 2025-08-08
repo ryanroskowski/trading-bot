@@ -9,8 +9,8 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 
-from ..config import load_config, save_config, project_root
-from ..storage.db import get_conn
+from src.config import load_config, save_config, project_root
+from src.storage.db import get_conn
 
 
 st.set_page_config(page_title="Trading Bot Dashboard", layout="wide", initial_sidebar_state="expanded")
