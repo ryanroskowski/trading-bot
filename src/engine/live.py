@@ -22,12 +22,13 @@ from ..ensemble.meta_allocator import MetaAllocator, MetaConfig
 from ..utils.risk import (
     realized_vol_annualized,
     vol_target_scale,
+    scale_to_target_vol,
     cap_total_allocation,
     enforce_max_positions,
     apply_drawdown_derisking,
     pdt_guard,
 )
-from ..storage.db import init_db, insert_equity
+from ..storage.db import init_db, insert_equity, insert_targets
 
 
 @dataclass
@@ -353,14 +354,13 @@ def run_live_loop() -> None:
                         max_weight = per_trade_cap / ctx.equity_usd
                         target[symbol] = min(target[symbol], max_weight)
             
-            # 4. Volatility targeting
+            # 4. Volatility targeting (live overlay matching backtest behavior)
             try:
                 base_port_ret = (comp_w.fillna(0.0) * rets.reindex_like(comp_w).fillna(0.0)).sum(axis=1)
-                vol_ann = realized_vol_annualized(base_port_ret, window=20).iloc[-1]
                 target_vol = float(risk["target_vol_annual"])
-                scale = vol_target_scale(float(vol_ann), target_vol)
+                scale = scale_to_target_vol(base_port_ret.tail(60), target_vol, window=20)
                 target = target * scale
-                logger.debug(f"Vol targeting: realized={vol_ann:.3f}, target={target_vol:.3f}, scale={scale:.3f}")
+                logger.debug(f"Vol targeting: scale={scale:.3f}")
             except Exception as e:
                 logger.warning(f"Vol targeting failed: {e}")
             
@@ -422,6 +422,12 @@ def run_live_loop() -> None:
                 insert_equity(pd.Timestamp.utcnow().isoformat(), float(ctx.equity_usd))
             except Exception as e:
                 logger.warning(f"Equity persistence failed: {e}")
+
+            # Persist last computed target weights for API/dashboard visibility
+            try:
+                insert_targets(pd.Timestamp.utcnow().isoformat(), target)
+            except Exception as e:
+                logger.warning(f"Target weights persistence failed: {e}")
             
             logger.info(f"Live loop cycle complete. Equity: ${ctx.equity_usd:,.2f}, "
                        f"PDT trades today: {ctx.pdt_trades_today}")

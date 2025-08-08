@@ -24,6 +24,8 @@ from ..utils.risk import (
     apply_drawdown_derisking,
 )
 from ..storage.metrics import compute_report
+from dataclasses import asdict
+import pandas as pd
 import matplotlib.pyplot as plt
 from ..config import project_root
 
@@ -176,12 +178,21 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
         prev_w = w_scaled
 
     logger.info("Backtest complete; writing reports")
-    metrics = compute_report(after_cost)  # compute and optionally persist
+    metrics = compute_report(after_cost)  # compute and persist metrics CSV
     reports_dir = project_root() / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     comp_w.to_csv(reports_dir / "weights.csv")
+    try:
+        meta_weights.to_csv(reports_dir / "meta_weights.csv")
+    except Exception:
+        pass
     after_cost.rename("daily_return").to_csv(reports_dir / "daily_returns.csv")
     equity.rename("equity").to_csv(reports_dir / "equity.csv")
+    # Metrics CSV
+    try:
+        pd.DataFrame([asdict(metrics)]).to_csv(reports_dir / "metrics.csv", index=False)
+    except Exception:
+        pass
     # Charts
     plt.figure(figsize=(10, 5))
     equity.plot(title="Equity Curve")

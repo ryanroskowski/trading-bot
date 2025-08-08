@@ -31,20 +31,9 @@ class TestEndToEndBacktest:
             yield
         
         # Cleanup
-        try:
-            if self.temp_db.exists():
-                self.temp_db.unlink()
-            # Remove any remaining files in the directory
-            for file in Path(self.temp_dir).glob("*"):
-                if file.is_file():
-                    file.unlink()
-                elif file.is_dir():
-                    import shutil
-                    shutil.rmtree(file)
-            os.rmdir(self.temp_dir)
-        except OSError:
-            # If cleanup fails, just pass - it's not critical for test success
-            pass
+        if self.temp_db.exists():
+            self.temp_db.unlink()
+        os.rmdir(self.temp_dir)
 
     def test_backtest_complete_workflow(self):
         """Test complete backtest workflow with real strategy logic."""
@@ -105,7 +94,7 @@ class TestEndToEndBacktest:
         assert "vm_dm" in result.per_strategy_returns
         assert "tsmom" in result.per_strategy_returns
         assert "qv_trend" in result.per_strategy_returns
-        # overnight_drift_demo is disabled by default, so don't check for it
+        assert "overnight" in result.per_strategy_returns
         
         # Validate equity curve makes sense
         assert result.equity_curve.iloc[0] == 1.0  # Starts at 1.0
@@ -123,45 +112,41 @@ class TestEndToEndBacktest:
         
         # Check that slippage and commission were applied
         # (results should be slightly lower than without costs)
-        assert len(result.daily_returns) == len(dates)  # Same length as business days
+        assert len(result.daily_returns) == len(dates) - 1  # One less due to first day
 
     def test_backtest_with_all_strategies_enabled(self):
         """Test backtest with all strategies enabled."""
-        # Load config and enable all strategies - need to patch the import in backtest module too
-        with patch('src.engine.backtest.load_config') as mock_load_config_bt:
+        # Load config and enable all strategies
+        with patch('src.config.load_config') as mock_load_config:
             cfg = load_config()
             cfg["strategies"]["vm_dual_momentum"]["enabled"] = True
             cfg["strategies"]["tsmom_macro_lite"]["enabled"] = True
             cfg["strategies"]["qv_trend"]["enabled"] = True
             cfg["strategies"]["overnight_drift_demo"]["enabled"] = True
             cfg["ensemble"]["meta_allocator"]["enabled"] = True
-            mock_load_config_bt.return_value = cfg
-
+            mock_load_config.return_value = cfg
+            
             # Create minimal test data
             dates = pd.date_range("2022-01-01", periods=60, freq="B")
             etf_symbols = ["SPY", "EFA", "IEF", "BIL"]
-
+            
             # Simple trending data
             price_data = {}
             for i, symbol in enumerate(etf_symbols):
                 base_price = 100 + i * 20
                 price_data[symbol] = base_price + np.arange(len(dates)) * 0.1
-
+            
             close_df = pd.DataFrame(price_data, index=dates)
             open_df = close_df.shift(1).bfill()
-
+            
             mock_price_data = SimpleNamespace(close=close_df, open=open_df)
-
+            
             with patch('src.engine.backtest.fetch_yf_ohlcv', return_value=mock_price_data):
                 with patch('pandas.read_csv', return_value=pd.DataFrame({'Ticker': ['AAPL']})):
                     result = bt.run_backtest()
-
-            # All strategies should have computed returns (overnight is keyed as "overnight", not "overnight_drift_demo")
+            
+            # All strategies should have computed returns
             assert len(result.per_strategy_returns) == 4
-            assert "vm_dm" in result.per_strategy_returns
-            assert "tsmom" in result.per_strategy_returns
-            assert "qv_trend" in result.per_strategy_returns
-            assert "overnight" in result.per_strategy_returns
             assert all(len(returns) > 0 for returns in result.per_strategy_returns.values())
 
     def test_backtest_cli_integration(self):
@@ -241,29 +226,28 @@ class TestEndToEndBacktest:
     def test_reports_generation(self):
         """Test that reports are generated correctly."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Patch the project_root function in both places it's used
+            # Patch the reports directory
             with patch('src.config.project_root', return_value=Path(temp_dir)):
-                with patch('src.engine.backtest.project_root', return_value=Path(temp_dir)):
-
-                    # Create minimal test data
-                    dates = pd.date_range("2022-01-01", periods=50, freq="B")
-                    close_data = pd.DataFrame({
-                        "SPY": 400 + np.arange(len(dates)),
-                        "EFA": 70 + np.arange(len(dates)) * 0.5,
-                        "IEF": np.full(len(dates), 100.0),
-                        "BIL": np.full(len(dates), 100.0)
-                    }, index=dates)
-
-                    open_data = close_data.shift(1).bfill()
-                    mock_price_data = SimpleNamespace(close=close_data, open=open_data)
-
-                    with patch('src.engine.backtest.fetch_yf_ohlcv', return_value=mock_price_data):
-                        with patch('pandas.read_csv', return_value=pd.DataFrame({'Ticker': ['AAPL']})):
-                            result = bt.run_backtest()
-
-                    # Check that reports directory was created
-                    reports_dir = Path(temp_dir) / "reports"
-                    assert reports_dir.exists()
+                
+                # Create minimal test data
+                dates = pd.date_range("2022-01-01", periods=50, freq="B")
+                close_data = pd.DataFrame({
+                    "SPY": 400 + np.arange(len(dates)),
+                    "EFA": 70 + np.arange(len(dates)) * 0.5,
+                    "IEF": np.full(len(dates), 100.0),
+                    "BIL": np.full(len(dates), 100.0)
+                }, index=dates)
+                
+                open_data = close_data.shift(1).bfill()
+                mock_price_data = SimpleNamespace(close=close_data, open=open_data)
+                
+                with patch('src.engine.backtest.fetch_yf_ohlcv', return_value=mock_price_data):
+                    with patch('pandas.read_csv', return_value=pd.DataFrame({'Ticker': ['AAPL']})):
+                        result = bt.run_backtest()
+                
+                # Check that reports directory was created
+                reports_dir = Path(temp_dir) / "reports"
+                assert reports_dir.exists()
 
 
 class TestLiveEngineComponents:

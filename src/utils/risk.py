@@ -21,6 +21,25 @@ def vol_target_scale(portfolio_vol_ann: float, target_vol_ann: float) -> float:
     return float(np.clip(target_vol_ann / portfolio_vol_ann, 0.0, 10.0))
 
 
+def scale_to_target_vol(daily_returns: pd.Series, target_vol_ann: float, window: int = 20) -> float:
+    """Compute a bounded scaling factor to reach target annualized volatility.
+
+    Uses a rolling window estimate of realized volatility; clamps the scale
+    between 0.2x and 1.5x to avoid abrupt swings during live trading.
+    """
+    if daily_returns is None or daily_returns.empty:
+        return 1.0
+    try:
+        vol_ann_series = realized_vol_annualized(daily_returns, window=window)
+        vol_ann = float(vol_ann_series.iloc[-1])
+        if vol_ann <= 1e-12 or np.isnan(vol_ann):
+            return 1.0
+        scale = float(target_vol_ann / vol_ann)
+        return float(np.clip(scale, 0.2, 1.5))
+    except Exception:
+        return 1.0
+
+
 def apply_drawdown_derisking(equity_curve: pd.Series, threshold_pct: float, scale: float) -> float:
     peak = equity_curve.cummax()
     dd = (equity_curve / peak - 1.0).iloc[-1] * -100.0
