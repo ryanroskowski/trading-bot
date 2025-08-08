@@ -1,0 +1,57 @@
+version: "3.8"
+services:
+  bot:
+    build: .
+    container_name: trading-bot
+    command: python -m src.cli.main live
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+      - ./db:/app/db
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    container_name: trading-dashboard
+    command: streamlit run src/dashboards/app.py --server.port 8501 --server.address 0.0.0.0
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+      - ./db:/app/db
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: trading-api
+    command: uvicorn src.api.status:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./db:/app/db
+    restart: unless-stopped
+
+  test:
+    build: .
+    container_name: trading-test
+    command: sh -c "pytest -q --junitxml /app/reports/junit.xml"
+    working_dir: /app
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./reports:/app/reports
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+

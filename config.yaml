@@ -1,0 +1,63 @@
+mode: paper  # backtest | paper | live
+profile: default  # conservative | default | aggressive | turbo
+timezone: America/New_York
+
+universe:
+  etfs: [SPY, EFA, IEF, BIL, DBC, TLT, UUP]
+  leveraged_etfs: [SSO, UPRO, TMF]
+  large_cap_csv: src/data/universe_large_cap.csv
+
+strategies:
+  vm_dual_momentum:
+    enabled: true
+    rebalance: monthly
+    lookbacks_months: [6, 12]
+    abs_filter: true
+  tsmom_macro_lite:
+    enabled: true
+    rebalance: monthly
+    lookback_months: 12
+  qv_trend:
+    enabled: true
+    rebalance: monthly
+    top_n: 10
+  overnight_drift:
+    enabled: false  # disabled by default for live
+    vix_filter: false
+    vix_threshold: 25
+
+ensemble:
+  meta_allocator:
+    enabled: true
+    method: ewma-sharpe
+    lookbacks: [63, 126, 252]
+    weights: [0.5, 0.3, 0.2]
+    cooldown_days: 21
+    min_hold_days: 21
+    max_switches_per_quarter: 2
+    blend_top_k: 2
+
+risk:
+  max_total_allocation_pct: 0.60
+  per_trade_usd_cap: 50
+  max_positions_total: 12
+  allow_fractional: true
+  target_vol_annual: 0.10
+  dd_derisk_threshold_pct: 10
+  dd_derisk_scale: 0.5
+  use_leverage: false
+  max_gross_exposure: 1.0
+  kill_switch_file: KILL_SWITCH
+
+schedule:
+  check_interval_seconds: 60
+  market_hours_only: true
+  rebalance_day: last_business_day
+
+slippage:
+  bps: 3
+  commission_per_share: 0.0
+
+notifier:
+  discord_webhook: ""
+
