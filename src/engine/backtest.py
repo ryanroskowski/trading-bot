@@ -56,7 +56,7 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
         rebalance=cfg["strategies"]["tsmom_macro_lite"]["rebalance"],
     )
     qv_cfg = QVConfig(top_n=cfg["strategies"]["qv_trend"]["top_n"], rebalance=cfg["strategies"]["qv_trend"]["rebalance"])
-    on_cfg = ONDriftConfig(**cfg["strategies"]["overnight_drift"])  # may be disabled
+    on_cfg = ONDriftConfig(**cfg["strategies"]["overnight_drift_demo"])  # may be disabled
 
     w_vm = vm_weights(close, vm_cfg)
     w_ts = ts_weights(close, ts_cfg)
@@ -79,7 +79,11 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
     else:
         w_qv = pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
-    w_on = on_weights(close["SPY"], open_["SPY"], on_cfg) if "SPY" in close.columns else pd.DataFrame(0.0, index=close.index, columns=["SPY"])  # research
+    # Compute overnight drift only if enabled
+    if cfg["strategies"]["overnight_drift_demo"]["enabled"]:
+        w_on = on_weights(close["SPY"], open_["SPY"], on_cfg) if "SPY" in close.columns else pd.DataFrame(0.0, index=close.index, columns=["SPY"])
+    else:
+        w_on = pd.DataFrame(0.0, index=close.index, columns=["SPY"])
 
     # Align to open for next-bar execution
     def shift_to_open(w: pd.DataFrame) -> pd.DataFrame:
@@ -91,13 +95,16 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
     w_qv_o = shift_to_open(w_qv.reindex(close.index).reindex(columns=close.columns, fill_value=0.0))
     w_on_o = shift_to_open(w_on.reindex(columns=["SPY"])) if not w_on.empty else pd.DataFrame(0.0, index=open_.index, columns=["SPY"]).fillna(0.0)
 
-    # Per-strategy returns
-    strat_weights = {
-        "vm_dm": w_vm_o.reindex(columns=close.columns, fill_value=0.0),
-        "tsmom": w_ts_o.reindex(columns=close.columns, fill_value=0.0),
-        "qv_trend": w_qv_o.reindex(columns=close.columns, fill_value=0.0),
-        "overnight": w_on_o.reindex(columns=close.columns, fill_value=0.0),
-    }
+    # Per-strategy returns - only include enabled strategies
+    strat_weights = {}
+    if cfg["strategies"]["vm_dual_momentum"]["enabled"]:
+        strat_weights["vm_dm"] = w_vm_o.reindex(columns=close.columns, fill_value=0.0)
+    if cfg["strategies"]["tsmom_macro_lite"]["enabled"]:
+        strat_weights["tsmom"] = w_ts_o.reindex(columns=close.columns, fill_value=0.0)
+    if cfg["strategies"]["qv_trend"]["enabled"]:
+        strat_weights["qv_trend"] = w_qv_o.reindex(columns=close.columns, fill_value=0.0)
+    if cfg["strategies"]["overnight_drift_demo"]["enabled"]:
+        strat_weights["overnight"] = w_on_o.reindex(columns=close.columns, fill_value=0.0)
 
     per_strat_returns = {}
     for name, w in strat_weights.items():

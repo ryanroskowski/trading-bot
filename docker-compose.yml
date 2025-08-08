@@ -1,4 +1,3 @@
-version: "3.8"
 services:
   bot:
     build: .
@@ -7,51 +6,126 @@ services:
     env_file:
       - .env
     volumes:
-      - ./config.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
       - ./db:/app/db
       - ./reports:/app/reports
       - ./logs:/app/logs
+      - ./.env:/app/.env:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - db-init
+    networks:
+      - trading-network
 
   dashboard:
     build: .
     container_name: trading-dashboard
-    command: streamlit run src/dashboards/app.py --server.port 8501 --server.address 0.0.0.0
+    command: streamlit run src/dashboards/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true --server.enableCORS false
     env_file:
       - .env
     ports:
       - "8501:8501"
     volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./data:/app/data
-      - ./db:/app/db
-      - ./reports:/app/reports
-      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data:ro
+      - ./db:/app/db:ro
+      - ./reports:/app/reports:ro
+      - ./logs:/app/logs:ro
+      - ./.env:/app/.env:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - api
+      - db-init
+    networks:
+      - trading-network
 
   api:
     build: .
     container_name: trading-api
-    command: uvicorn src.api.status:app --host 0.0.0.0 --port 8000
+    command: uvicorn src.api.status:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - .env
     ports:
       - "8000:8000"
     volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./db:/app/db
+      - ./config.yaml:/app/config.yaml:ro
+      - ./db:/app/db:ro
+      - ./.env:/app/.env:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - db-init
+    networks:
+      - trading-network
+
+  db-init:
+    build: .
+    container_name: trading-db-init
+    command: python -c "from src.storage.db import init_db; init_db(); print('Database initialized')"
+    volumes:
+      - ./db:/app/db
+    restart: "no"
+    networks:
+      - trading-network
 
   test:
     build: .
     container_name: trading-test
-    command: sh -c "pytest -q --junitxml /app/reports/junit.xml"
+    command: pytest -q -s --junitxml=/app/reports/junit.xml
     working_dir: /app
     volumes:
-      - ./config.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml:ro
       - ./reports:/app/reports
+      - ./tests:/app/tests:ro
+      - ./src:/app/src:ro
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
+    networks:
+      - trading-network
+
+  backtest:
+    build: .
+    container_name: trading-backtest
+    command: python -m src.cli.main backtest --strategy all
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    networks:
+      - trading-network
+
+networks:
+  trading-network:
+    driver: bridge
+    name: trading-network
+
+volumes:
+  trading-data:
+    driver: local
+  trading-db:
+    driver: local
+  trading-reports:
+    driver: local
+  trading-logs:
+    driver: local
 

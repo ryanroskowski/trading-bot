@@ -21,7 +21,7 @@ strategies:
     enabled: true
     rebalance: monthly
     top_n: 10
-  overnight_drift:
+  overnight_drift_demo:
     enabled: false  # disabled by default for live
     vix_filter: false
     vix_threshold: 25
@@ -39,12 +39,14 @@ ensemble:
 
 risk:
   max_total_allocation_pct: 0.60
-  per_trade_usd_cap: 50
+  per_trade_cap_usd: 5000
   max_positions_total: 12
   allow_fractional: true
   target_vol_annual: 0.10
   dd_derisk_threshold_pct: 10
   dd_derisk_scale: 0.5
+  dust_threshold_usd: 3.0
+  daily_loss_circuit_breaker_pct: 5.0
   use_leverage: false
   max_gross_exposure: 1.0
   kill_switch_file: KILL_SWITCH

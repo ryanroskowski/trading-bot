@@ -70,8 +70,20 @@ def _probabilistic_sharpe_ratio(r: pd.Series, sr_bench: float = 0.0) -> float:
         return 0.0
     sr = r.mean() / r.std(ddof=0) * math.sqrt(TRADING_DAYS_PER_YEAR)
     n = len(r)
+    
+    # Guard against edge cases that cause math domain error
+    if n <= 1:
+        return 0.0
+    
     k = (1 + sr**2 / 2) / (n - 1)
-    z = (sr - sr_bench) * math.sqrt((n - 1) / (1 - k))
+    
+    # Check for negative value under square root (causes domain error)
+    denominator = 1 - k
+    if denominator <= 0:
+        # When k >= 1, the formula breaks down; return 0 or 1 based on SR
+        return 1.0 if sr > sr_bench else 0.0
+    
+    z = (sr - sr_bench) * math.sqrt((n - 1) / denominator)
     # Convert Z to prob ~ N(0,1)
     return float(0.5 * (1 + math.erf(z / math.sqrt(2))))
 

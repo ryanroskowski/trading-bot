@@ -29,6 +29,16 @@ def init_db() -> None:
                 qty REAL NOT NULL,
                 status TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS orders_extended (
+                client_order_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                qty REAL NOT NULL,
+                side TEXT NOT NULL,
+                order_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                submitted_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS fills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
@@ -37,9 +47,25 @@ def init_db() -> None:
                 qty REAL NOT NULL,
                 price REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS fills_extended (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_order_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                qty REAL NOT NULL,
+                price REAL NOT NULL,
+                fill_time TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS equity (
                 ts TEXT PRIMARY KEY,
                 value REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS positions (
+                ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                qty REAL NOT NULL,
+                market_value REAL NOT NULL,
+                unrealized_pl REAL NOT NULL,
+                PRIMARY KEY (ts, symbol)
             );
             """
         )
