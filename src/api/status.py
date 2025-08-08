@@ -130,6 +130,8 @@ def positions():
         # Try to get live positions from Alpaca
         try:
             positions_data = get_positions()
+            if positions_data is None:
+                positions_data = []
             
             # Also get any cached positions from database
             cached_positions = []
@@ -230,14 +232,32 @@ def fills():
 @app.get("/targets")
 def targets():
     """Get last computed target weights."""
-    # In a full implementation, we would persist target weights to database
-    # For now, return empty response with timestamp
-    return {
-        "target_weights": {},
-        "computation_time": None,
-        "timestamp": datetime.datetime.now().isoformat(),
-        "note": "Target weights persistence not yet implemented"
-    }
+    try:
+        with get_conn() as conn:
+            df = pd.read_sql_query(
+                """
+                SELECT ts, symbol, weight FROM targets 
+                WHERE ts = (SELECT MAX(ts) FROM targets)
+                ORDER BY symbol
+                """,
+                conn
+            )
+        if df.empty:
+            return {
+                "target_weights": {},
+                "computation_time": None,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "note": "No targets available yet"
+            }
+        ts = df['ts'].iloc[0]
+        weights = {row['symbol']: float(row['weight']) for _, row in df.iterrows()}
+        return {
+            "target_weights": weights,
+            "computation_time": ts,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/account")

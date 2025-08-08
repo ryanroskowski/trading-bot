@@ -126,7 +126,7 @@ if page == "Overview":
     if api_available and status_data.get("kill_switch_active", False):
         st.error("🚨 **KILL SWITCH ACTIVE** - All trading operations are halted!")
     
-    # Equity chart
+    # Equity chart + Drawdown
     st.subheader("💰 Equity Curve")
     
     equity_df = None
@@ -156,6 +156,22 @@ if page == "Overview":
         )
         
         st.plotly_chart(fig, use_container_width=True)
+
+        # Drawdown
+        equity_series = equity_df.set_index('ts')['value']
+        peak = equity_series.cummax()
+        drawdown = (equity_series / peak - 1.0) * 100
+        dd_fig = go.Figure()
+        dd_fig.add_trace(go.Scatter(
+            x=drawdown.index,
+            y=drawdown.values,
+            mode='lines',
+            name='Drawdown',
+            line=dict(color='#d62728', width=2)
+        ))
+        dd_fig.update_layout(title="Drawdown (%)", xaxis_title="Date", yaxis_title="%",
+                             height=250, hovermode='x unified')
+        st.plotly_chart(dd_fig, use_container_width=True)
         
         # Stats below chart
         if len(equity_df) > 1:
@@ -260,6 +276,44 @@ elif page == "Strategy Controls":
                 
         except Exception as e:
             st.error(f"❌ Failed to save configuration: {e}")
+
+elif page == "Performance Metrics":
+    st.header("📈 Performance & Signals")
+
+    # Load reports if present (from backtest)
+    reports_dir = project_root() / "reports"
+    meta_weights_path = reports_dir / "weights.csv"
+    metrics_path = reports_dir / "metrics.csv"
+
+    cols = st.columns(2)
+    with cols[0]:
+        st.subheader("Strategy Blend Weights (Backtest)")
+        try:
+            if meta_weights_path.exists():
+                wdf = pd.read_csv(meta_weights_path, index_col=0, parse_dates=True)
+                st.area_chart(wdf)
+            else:
+                st.info("No backtest weights.csv found yet.")
+        except Exception as e:
+            st.error(f"Failed to load weights: {e}")
+    with cols[1]:
+        st.subheader("Summary Metrics")
+        try:
+            if metrics_path.exists():
+                mdf = pd.read_csv(metrics_path)
+                st.dataframe(mdf)
+            else:
+                st.info("No metrics.csv found yet.")
+        except Exception as e:
+            st.error(f"Failed to load metrics: {e}")
+
+    st.subheader("Live Target Weights (Latest)")
+    targets_data = get_api_data("/targets")
+    if "target_weights" in targets_data and targets_data["target_weights"]:
+        tdf = pd.DataFrame(list(targets_data["target_weights"].items()), columns=["Symbol", "Weight"]).set_index("Symbol")
+        st.bar_chart(tdf)
+    else:
+        st.info("No live targets available yet.")
 
 elif page == "System Status":
     st.header("🔧 System Status")
