@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Tuple
+from datetime import datetime, timedelta
 
 from ..config import project_root
 
@@ -104,7 +105,10 @@ def init_db() -> None:
             
             -- Helpful indexes
             CREATE INDEX IF NOT EXISTS idx_orders_extended_client_id ON orders_extended(client_order_id);
+            CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status);
+            CREATE INDEX IF NOT EXISTS ix_orders_ext_status ON orders_extended(status);
             CREATE INDEX IF NOT EXISTS idx_fills_extended_client_id ON fills_extended(client_order_id);
+            CREATE INDEX IF NOT EXISTS ix_fills_extended_time ON fills_extended(fill_time);
             CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity(ts);
             CREATE INDEX IF NOT EXISTS idx_positions_ts ON positions(ts);
             CREATE INDEX IF NOT EXISTS idx_targets_ts ON targets(ts);
@@ -186,5 +190,92 @@ def insert_runtime_status(ts: str, pdt_trades_today: int, circuit_breaker_active
         conn.execute(
             "INSERT OR REPLACE INTO runtime_status(ts, pdt_trades_today, circuit_breaker_active) VALUES (?, ?, ?)",
             (ts, int(pdt_trades_today), 1 if circuit_breaker_active else 0)
+        )
+
+
+# ---- Order and fill reconciliation helpers ----
+
+def get_open_orders() -> list[dict]:
+    """Return open/working orders with aggregated filled quantity.
+
+    Status considered open: NEW, PARTIALLY_FILLED, ACCEPTED, PENDING, SUBMITTED
+    """
+    open_statuses = ("NEW", "PARTIALLY_FILLED", "ACCEPTED", "PENDING", "SUBMITTED")
+    placeholders = ",".join(["?"] * len(open_statuses))
+    sql = f"""
+        SELECT oe.client_order_id, oe.symbol, oe.side, oe.qty, oe.status, oe.submitted_at,
+               COALESCE(SUM(fe.qty), 0.0) AS filled_qty
+        FROM orders_extended AS oe
+        LEFT JOIN fills_extended AS fe ON fe.client_order_id = oe.client_order_id
+        WHERE oe.status IN ({placeholders})
+        GROUP BY oe.client_order_id, oe.symbol, oe.side, oe.qty, oe.status, oe.submitted_at
+    """
+    with get_conn() as conn:
+        rows = conn.execute(sql, open_statuses).fetchall()
+    results = []
+    for row in rows:
+        results.append({
+            "client_order_id": row[0],
+            "symbol": row[1],
+            "side": row[2],
+            "qty": float(row[3]),
+            "status": row[4],
+            "submitted_at": row[5],
+            "filled_qty": float(row[6] or 0.0),
+        })
+    return results
+
+
+def get_recent_fills(since_minutes: int = 60) -> list[dict]:
+    """Return fills in the last `since_minutes`."""
+    threshold = (datetime.utcnow() - timedelta(minutes=since_minutes)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT client_order_id, symbol, qty, price, fill_time
+            FROM fills_extended
+            WHERE fill_time >= ?
+            ORDER BY fill_time ASC
+            """,
+            (threshold,)
+        ).fetchall()
+    return [
+        {
+            "client_order_id": r[0],
+            "symbol": r[1],
+            "qty": float(r[2]),
+            "price": float(r[3]),
+            "fill_time": r[4],
+        }
+        for r in rows
+    ]
+
+
+def mark_order_closed(client_order_id: str) -> None:
+    """Mark order as FILLED when its absolute filled qty >= absolute order qty."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT qty FROM orders_extended WHERE client_order_id = ?",
+            (client_order_id,)
+        ).fetchone()
+        if not row:
+            return
+        qty = abs(float(row[0]))
+        filled = conn.execute(
+            "SELECT COALESCE(SUM(ABS(qty)), 0.0) FROM fills_extended WHERE client_order_id = ?",
+            (client_order_id,)
+        ).fetchone()[0]
+        if float(filled or 0.0) >= qty - 1e-9:
+            conn.execute(
+                "UPDATE orders_extended SET status = 'FILLED' WHERE client_order_id = ?",
+                (client_order_id,)
+            )
+
+
+def mark_order_canceled(client_order_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE orders_extended SET status = 'CANCELED' WHERE client_order_id = ?",
+            (client_order_id,)
         )
 

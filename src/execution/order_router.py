@@ -9,7 +9,12 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..storage.db import init_db
+from ..storage.db import (
+    init_db,
+    get_open_orders,
+    get_recent_fills,
+    mark_order_closed,
+)
 from ..storage.orders import save_order, get_order_by_client_id
 from .alpaca import AlpacaConnector, get_positions
 
@@ -233,9 +238,59 @@ def reconcile_and_route(
     # Step 2: Compute order deltas
     deltas = compute_order_deltas(target_weights, current_positions, last_prices, ctx.equity_usd)
     logger.info(f"Computed deltas for {len(deltas)} symbols")
+
+    # Step 2.5: Partial-fill reconciliation and open orders consideration
+    open_orders = get_open_orders()
+    recent_fills = get_recent_fills(since_minutes=60)
+    open_by_symbol = {}
+    for o in open_orders:
+        sym = o["symbol"]
+        s = open_by_symbol.setdefault(sym, {"buy": [], "sell": []})
+        side = (o.get("side") or "").lower()
+        filled_qty = float(o.get("filled_qty") or 0.0)
+        qty = float(o.get("qty") or 0.0)
+        rem = max(0.0, qty - filled_qty)
+        if side == "buy":
+            s["buy"].append(rem)
+        elif side == "sell":
+            s["sell"].append(rem)
+
+    effective_deltas: Dict[str, float] = {}
+    for sym, delta in deltas.items():
+        working_buy = sum(open_by_symbol.get(sym, {}).get("buy", []))
+        working_sell = sum(open_by_symbol.get(sym, {}).get("sell", []))
+        eff = delta - working_buy + working_sell
+        logger.info(
+            f"partial_reconcile: symbol={sym}, delta={delta:.6f}, working_buy={working_buy:.6f}, "
+            f"working_sell={working_sell:.6f}, effective={eff:.6f}"
+        )
+        effective_deltas[sym] = eff
+
+    # Direction flip protection: if existing open orders are opposite sign of effective delta, cancel first
+    for sym, eff in list(effective_deltas.items()):
+        s = open_by_symbol.get(sym)
+        if not s:
+            continue
+        has_buy = sum(s.get("buy", [])) > 1e-9
+        has_sell = sum(s.get("sell", [])) > 1e-9
+        if eff < 0 and has_buy:
+            logger.warning(f"cancel_open_orders due to direction flip: symbol={sym}")
+            try:
+                alpaca.cancel_open_orders(sym)  # best effort
+            except Exception:
+                pass
+            # Do not submit opposite order in the same loop
+            effective_deltas[sym] = 0.0
+        elif eff > 0 and has_sell:
+            logger.warning(f"cancel_open_orders due to direction flip: symbol={sym}")
+            try:
+                alpaca.cancel_open_orders(sym)
+            except Exception:
+                pass
+            effective_deltas[sym] = 0.0
     
     # Step 3: Apply trade filters
-    filtered_deltas = apply_trade_filters(deltas, last_prices, ctx)
+    filtered_deltas = apply_trade_filters(effective_deltas, last_prices, ctx)
     logger.info(f"After filtering: {len(filtered_deltas)} orders to submit")
     
     # Step 4: Submit orders with idempotency
@@ -254,6 +309,36 @@ def reconcile_and_route(
                 delta = -abs(delta)
             submitted_deltas[result.symbol] = delta
     
+    # Mark orders closed if fully filled this loop
+    for o in get_open_orders():
+        try:
+            mark_order_closed(o["client_order_id"])
+        except Exception:
+            pass
+
+    # Optional: cancel stale orders older than 15 minutes
+    try:
+        from datetime import datetime, timezone
+        cutoff_min = 15
+        for o in get_open_orders():
+            try:
+                ts = o.get("submitted_at")
+                if not ts:
+                    continue
+                # parse without strict tz handling
+                submit_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                age_min = (datetime.now(timezone.utc) - submit_dt.astimezone(timezone.utc)).total_seconds() / 60.0
+                if age_min >= cutoff_min:
+                    logger.warning(f"stale_open_order_cancel: client_order_id={o['client_order_id']}, age_min={age_min:.1f}")
+                    try:
+                        alpaca.cancel_order(o["client_order_id"])
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     logger.info(f"Successfully submitted {len(submitted_deltas)} orders")
     return results, submitted_deltas
 

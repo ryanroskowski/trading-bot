@@ -273,6 +273,58 @@ class AlpacaConnector:
         ]
         return any(trigger in error_msg_lower for trigger in fallback_triggers)
 
+    # ---- New helpers for open orders and cancellation ----
+    def list_open_orders(self) -> List[Dict[str, Any]]:
+        """List open orders with basic fields: symbol, side, qty, filled_qty, client_order_id."""
+        try:
+            orders = self.trading_client.get_orders(status="open")
+            result: List[Dict[str, Any]] = []
+            for o in orders:
+                try:
+                    result.append({
+                        "symbol": o.symbol,
+                        "side": o.side.value if o.side else None,
+                        "qty": float(o.qty) if o.qty else 0.0,
+                        "filled_qty": float(o.filled_qty) if getattr(o, 'filled_qty', None) else 0.0,
+                        "client_order_id": o.client_order_id,
+                        "submitted_at": o.submitted_at.isoformat() if o.submitted_at else None,
+                        "id": o.id,
+                    })
+                except Exception:
+                    continue
+            return result
+        except Exception as e:
+            logger.error(f"list_open_orders failed: {e}")
+            return []
+
+    def cancel_order(self, client_order_id: str) -> bool:
+        """Best-effort cancel by client order ID."""
+        try:
+            # Need to map to broker order id
+            orders = self.trading_client.get_orders(status="open")
+            for o in orders:
+                if o.client_order_id == client_order_id:
+                    self.trading_client.cancel_order_by_id(o.id)
+                    return True
+        except Exception as e:
+            logger.warning(f"cancel_order({client_order_id}) failed: {e}")
+        return False
+
+    def cancel_open_orders(self, symbol: str) -> int:
+        """Cancel all open orders for a symbol. Returns count canceled."""
+        canceled = 0
+        try:
+            orders = self.trading_client.get_orders(status="open", symbols=[symbol])
+            for o in orders:
+                try:
+                    self.trading_client.cancel_order_by_id(o.id)
+                    canceled += 1
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning(f"cancel_open_orders({symbol}) failed: {e}")
+        return canceled
+
 
 # Legacy functions for backward compatibility
 def _client() -> TradingClient:
