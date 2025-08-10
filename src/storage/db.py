@@ -158,12 +158,18 @@ def insert_targets(ts: str, weights) -> None:
 
 def insert_meta_targets(ts: str, meta_weights) -> None:
     """Insert a snapshot of meta-allocator weights per strategy."""
-    if not meta_weights:
+    # Handle pandas Series / dict-like and avoid ambiguous truth-value checks
+    if meta_weights is None:
         return
     if hasattr(meta_weights, 'items'):
         items = list(meta_weights.items())
     else:
-        items = [(k, v) for k, v in meta_weights]
+        try:
+            items = [(k, v) for k, v in meta_weights]
+        except Exception:
+            return
+    if not items:
+        return
     with get_conn() as conn:
         conn.executemany(
             "INSERT OR REPLACE INTO meta_targets(ts, strategy, weight) VALUES (?, ?, ?)",

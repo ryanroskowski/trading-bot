@@ -130,9 +130,14 @@ if page == "Overview":
             else:
                 st.metric("Current Equity", "No data")
     
-    # Kill switch warning
-    if api_available and status_data.get("kill_switch_active", False):
-        st.error("🚨 **KILL SWITCH ACTIVE** - All trading operations are halted!")
+    # Market-hours + Kill switch banners
+    if api_available:
+        if status_data.get("kill_switch_active", False):
+            st.error("🚨 **KILL SWITCH ACTIVE** - All trading operations are halted!")
+        market_hours_only = status_data.get("market_hours_only", True)
+        market_open_now = status_data.get("market_open_now", False)
+        if market_hours_only and not market_open_now:
+            st.warning("⏸️ Market is currently CLOSED. Paper/live orders will queue but not execute until the next market session.")
     
     # Equity chart + Drawdown
     st.subheader("💰 Equity Curve")

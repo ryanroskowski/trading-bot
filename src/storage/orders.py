@@ -28,12 +28,14 @@ def save_order(
     if submitted_at is None:
         submitted_at = datetime.now().isoformat()
         
+    # Ensure types are SQLite-friendly
+    coerce_broker_id = str(broker_order_id) if broker_order_id is not None else None
     with get_conn() as conn:
         conn.execute("""
             INSERT OR REPLACE INTO orders_extended 
             (client_order_id, symbol, qty, side, order_type, status, broker_order_id, submitted_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (client_order_id, symbol, qty, side, order_type, status, broker_order_id, submitted_at))
+        """, (client_order_id, symbol, float(qty), side, order_type, status, coerce_broker_id, submitted_at))
 
 
 def get_order_by_client_id(client_order_id: str) -> Optional[Dict[str, Any]]:

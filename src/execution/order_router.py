@@ -175,15 +175,20 @@ def submit_orders_with_idempotency(
             order_result = alpaca.submit_market_order(symbol, qty, side, client_order_id)
             
             if order_result.get('status') == 'accepted':
-                # Save to database
+                # Save to database (coerce broker_order_id to string)
+                broker_id = order_result.get('id')
+                try:
+                    broker_id = str(broker_id) if broker_id is not None else None
+                except Exception:
+                    broker_id = None
                 save_order(
                     client_order_id=client_order_id,
                     symbol=symbol,
-                    qty=qty,
+                    qty=float(qty),
                     side=side,
                     order_type="market",
                     status="submitted",
-                    broker_order_id=order_result.get('id'),
+                    broker_order_id=broker_id,
                     submitted_at=timestamp
                 )
                 

@@ -19,8 +19,23 @@ def next_bar_weights(weights_raw: pd.DataFrame, open_prices: pd.DataFrame) -> pd
 
 
 def monthly_rebalance_dates(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    month_ends = pd.DatetimeIndex(sorted(set((idx + pd.offsets.BMonthEnd(0)).normalize() for idx in index)))
-    return month_ends
+    """Return rebalance dates aligned to the last available trading timestamp per month.
+
+    Using calendar month-ends normalized to midnight can fail to intersect with
+    session timestamps (e.g., 09:30). This implementation groups by year-month
+    and takes the max index value actually present for each month.
+    """
+    if len(index) == 0:
+        return pd.DatetimeIndex([])
+    periods = index.to_period("M")
+    # Get last timestamp present in the index for each month
+    last_per_month = []
+    for period in pd.PeriodIndex(periods.unique()).sort_values():
+        mask = periods == period
+        # Safety: ensure at least one entry
+        if mask.any():
+            last_per_month.append(index[mask][-1])
+    return pd.DatetimeIndex(last_per_month)
 
 
 def weekly_rebalance_dates(index: pd.DatetimeIndex) -> pd.DatetimeIndex:

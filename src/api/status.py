@@ -9,6 +9,7 @@ import pandas as pd
 
 from ..config import load_config, project_root
 from ..storage.db import get_conn
+from ..engine.live import check_market_open
 from ..execution.alpaca import AlpacaConnector, get_account, get_positions
 
 
@@ -84,6 +85,7 @@ def status():
             "strategies": strategies,
             "meta_allocator_enabled": cfg.get("ensemble", {}).get("meta_allocator", {}).get("enabled", False),
             "market_hours_only": cfg.get("schedule", {}).get("market_hours_only", True),
+            "market_open_now": check_market_open(cfg.get("timezone", "America/New_York")),
             "timestamp": datetime.datetime.now().isoformat()
         }
     except Exception as e:

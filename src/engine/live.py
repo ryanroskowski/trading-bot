@@ -194,8 +194,14 @@ def run_live_loop() -> None:
                 logger.warning(f"Config hot-reload failed: {e}")
             
             # Check market hours
-            if cfg["schedule"]["market_hours_only"] and not check_market_open(cfg.get("timezone", "America/New_York")):
+            market_open = check_market_open(cfg.get("timezone", "America/New_York"))
+            if cfg["schedule"]["market_hours_only"] and not market_open:
                 logger.debug("Market closed, sleeping...")
+                # Persist a runtime status note so UI/API can surface it
+                try:
+                    insert_runtime_status(pd.Timestamp.utcnow().isoformat(), ctx.pdt_trades_today, ctx.circuit_breaker_active)
+                except Exception:
+                    pass
                 time.sleep(int(cfg["schedule"]["check_interval_seconds"]))
                 continue
             
@@ -228,7 +234,7 @@ def run_live_loop() -> None:
                 time.sleep(int(cfg["schedule"]["check_interval_seconds"]))
                 continue
             
-            # Get live prices from Alpaca
+            # Get live prices from Alpaca (if market closed, we still compute targets but do not expect fills)
             try:
                 all_symbols = list(etfs)
                 if cfg["strategies"]["qv_trend"]["enabled"]:
