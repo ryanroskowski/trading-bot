@@ -40,7 +40,6 @@ def save_config(cfg: Dict[str, Any], path: Path | str | None = None) -> None:
 
 def apply_profile_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
     profile = (cfg.get("profile") or "default").lower()
-    strategies = cfg.setdefault("strategies", {})
     risk = cfg.setdefault("risk", {})
 
     # Defaults if missing
@@ -48,45 +47,23 @@ def apply_profile_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
     risk.setdefault("use_leverage", False)
     risk.setdefault("max_gross_exposure", 1.0)
 
+    # Restrict profiles to risk-budget knobs only to avoid overfitting via parameters
     if profile == "conservative":
         risk["target_vol_annual"] = 0.08
-        # longer lookbacks, monthly rebalances
-        strategies.setdefault("vm_dual_momentum", {}).update({
-            "rebalance": "monthly",
-            "lookbacks_months": [12],
-        })
-        strategies.setdefault("tsmom_macro_lite", {}).update({
-            "rebalance": "monthly",
-            "lookback_months": 12,
-        })
+        risk["use_leverage"] = False
+        risk["max_gross_exposure"] = 1.0
     elif profile == "aggressive":
-        # allow weekly rebalances and shorter lookbacks
         risk["target_vol_annual"] = 0.18
-        strategies.setdefault("vm_dual_momentum", {}).update({
-            "rebalance": "weekly",
-            "lookbacks_months": [3, 6],
-        })
-        strategies.setdefault("tsmom_macro_lite", {}).update({
-            "rebalance": "weekly",
-            "lookback_months": 6,
-        })
+        risk["use_leverage"] = False
+        risk["max_gross_exposure"] = max(1.0, float(risk.get("max_gross_exposure", 1.0)))
     elif profile == "turbo":
         # aggressive + leverage + leveraged ETFs
         risk["target_vol_annual"] = 0.20
         risk["use_leverage"] = True
         risk["max_gross_exposure"] = max(1.2, float(risk.get("max_gross_exposure", 1.2)))
-        strategies.setdefault("vm_dual_momentum", {}).update({
-            "rebalance": strategies.get("vm_dual_momentum", {}).get("rebalance", "weekly"),
-            "lookbacks_months": strategies.get("vm_dual_momentum", {}).get("lookbacks_months", [3, 6]),
-        })
-        strategies.setdefault("tsmom_macro_lite", {}).update({
-            "rebalance": strategies.get("tsmom_macro_lite", {}).get("rebalance", "weekly"),
-            "lookback_months": strategies.get("tsmom_macro_lite", {}).get("lookback_months", 6),
-        })
     else:
-        # default profile: keep config.yaml values
-        strategies.setdefault("vm_dual_momentum", {}).setdefault("rebalance", "monthly")
-        strategies.setdefault("tsmom_macro_lite", {}).setdefault("rebalance", "monthly")
+        # default profile: keep config.yaml values, no overrides
+        pass
 
     return cfg
 

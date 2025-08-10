@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 
 from ..config import load_config, project_root
-from ..storage.db import get_conn
+from ..engine import backtest as bt
+from ..storage.db import get_conn, cancel_missing_open_orders
 from ..engine.live import check_market_open
 from ..execution.alpaca import AlpacaConnector, get_account, get_positions
 
@@ -24,6 +25,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.post("/backtest/run")
+def run_backtest_api(body: Dict[str, Any] | None = None):
+    """Kick off a backtest run and return a brief summary and artifact locations."""
+    try:
+        # Optional: allow overriding cfg path in request
+        cfg_path = None
+        if body and isinstance(body, dict):
+            cfg_path = body.get("config_path")
+        res = bt.run_backtest(cfg_path)
+        # Summarize
+        return {
+            "status": "ok",
+            "length": int(len(res.daily_returns)),
+            "final_equity": float(res.equity_curve.iloc[-1]) if len(res.equity_curve) else None,
+            "reports": {
+                "dir": str(project_root() / "reports"),
+                "weights": "reports/weights.csv",
+                "meta_weights": "reports/meta_weights.csv",
+                "equity": "reports/equity.csv",
+                "daily_returns": "reports/daily_returns.csv",
+                "metrics": "reports/metrics.csv",
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 def health():
@@ -185,13 +212,17 @@ def orders():
                 LIMIT 50
             """, conn)
             
-            orders_extended = pd.read_sql_query("""
-                SELECT submitted_at as timestamp, symbol, side, qty, status, 
+            orders_extended = pd.read_sql_query(
+                """
+                SELECT submitted_at as timestamp, symbol, side, qty, status,
                        client_order_id, broker_order_id, order_type
-                FROM orders_extended 
-                ORDER BY submitted_at DESC 
+                FROM orders_extended
+                WHERE UPPER(COALESCE(status, '')) <> 'CANCELED'
+                ORDER BY submitted_at DESC
                 LIMIT 50
-            """, conn)
+                """,
+                conn,
+            )
         
         return {
             "recent_orders": orders_extended.to_dict(orient="records"),
@@ -368,4 +399,51 @@ def metrics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/cancel_open_orders")
+def cancel_open_orders():
+    """Cancel all open orders at the broker (paper-safe) and return summary."""
+    try:
+        connector = AlpacaConnector()
+        open_orders = connector.list_open_orders()
+        results = []
+        for o in open_orders:
+            cid = o.get("client_order_id")
+            sym = o.get("symbol")
+            ok = connector.cancel_order(cid)
+            results.append({"client_order_id": cid, "symbol": sym, "canceled": bool(ok)})
+        # Best-effort DB sync: mark any DB-open orders not in broker-open set as canceled
+        try:
+            count = cancel_missing_open_orders([o.get("client_order_id") for o in open_orders if o.get("client_order_id")])
+        except Exception:
+            count = 0
+        return {
+            "canceled": results,
+            "count": len(results),
+            "db_synced": count,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/orders/cleanup_local")
+def cleanup_local_orders():
+    """Force-mark all locally open orders (submitted/pending/etc.) as CANCELED in SQLite.
+
+    Useful when test orders were submitted and then canceled externally at broker.
+    """
+    try:
+        with get_conn() as conn:
+            open_statuses = ("NEW", "PARTIALLY_FILLED", "ACCEPTED", "PENDING", "SUBMITTED")
+            placeholders = ",".join(["?"] * len(open_statuses))
+            sql = (
+                f"UPDATE orders_extended SET status = 'CANCELED' "
+                f"WHERE UPPER(TRIM(status)) IN ({placeholders})"
+            )
+            cur = conn.execute(sql, open_statuses)
+            conn.commit()
+            return {"updated_rows": int(cur.rowcount or 0), "timestamp": datetime.datetime.now().isoformat()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 

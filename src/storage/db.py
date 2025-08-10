@@ -226,7 +226,7 @@ def get_open_orders() -> list[dict]:
                COALESCE(SUM(fe.qty), 0.0) AS filled_qty
         FROM orders_extended AS oe
         LEFT JOIN fills_extended AS fe ON fe.client_order_id = oe.client_order_id
-        WHERE oe.status IN ({placeholders})
+        WHERE UPPER(oe.status) IN ({placeholders})
         GROUP BY oe.client_order_id, oe.symbol, oe.side, oe.qty, oe.status, oe.submitted_at
     """
     with get_conn() as conn:
@@ -298,3 +298,23 @@ def mark_order_canceled(client_order_id: str) -> None:
             (client_order_id,)
         )
 
+
+def cancel_missing_open_orders(open_client_ids: list[str]) -> int:
+    """Mark DB orders that are still marked open but no longer open at broker as CANCELED.
+
+    Returns number of rows updated.
+    """
+    open_statuses = ("NEW", "PARTIALLY_FILLED", "ACCEPTED", "PENDING", "SUBMITTED")
+    placeholders = ",".join(["?"] * len(open_statuses))
+    params = [*open_statuses]
+    not_in_clause = ""
+    if open_client_ids:
+        not_in_clause = " AND client_order_id NOT IN (" + ",".join(["?"] * len(open_client_ids)) + ")"
+        params += open_client_ids
+    sql = (
+        f"UPDATE orders_extended SET status = 'CANCELED' "
+        f"WHERE UPPER(status) IN ({placeholders})" + not_in_clause
+    )
+    with get_conn() as conn:
+        cur = conn.execute(sql, params)
+        return int(cur.rowcount or 0)

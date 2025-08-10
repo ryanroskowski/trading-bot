@@ -1,0 +1,9 @@
+[theme]
+base = "light"
+primaryColor = "#6366F1"           # Indigo 500
+backgroundColor = "#FCFCFD"        # App background
+secondaryBackgroundColor = "#F6F8FC" # Cards/sidebars
+textColor = "#0F172A"              # Title/body text
+font = "sans serif"
+
+

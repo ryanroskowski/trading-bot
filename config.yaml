@@ -2,6 +2,11 @@ mode: paper  # backtest | paper | live
 profile: default  # conservative | default | aggressive | turbo
 timezone: America/New_York
 
+returns:
+  # How to compute daily returns in backtests relative to execution timing
+  # options: close_to_close | open_to_close | open_to_open
+  convention: open_to_close
+
 universe:
   etfs: [SPY, EFA, IEF, BIL, DBC, TLT, UUP]
   leveraged_etfs: [SSO, UPRO, TMF]
@@ -21,15 +26,29 @@ strategies:
     enabled: true
     rebalance: monthly
     top_n: 10
+    use_etf_proxies: true
+    proxies: [QUAL, USMV, MTUM, VLUE]
   overnight_drift_demo:
     enabled: false  # disabled by default for live
     vix_filter: false
     vix_threshold: 25
+  carry_macro:
+    enabled: false
+    rebalance: monthly
+    universe: [IEF, TLT, DBC, UUP]
+  crypto_etf_trend:
+    enabled: false
+    rebalance: monthly
+    lookback_months: 6
+    # Spot bitcoin ETFs (US): IBIT (BlackRock), FBTC (Fidelity), plus futures BITO as fallback
+    universe: [IBIT, FBTC, BITO]
+    cash: BIL
+    max_weight: 0.10
 
 ensemble:
   meta_allocator:
     enabled: true
-    method: ewma-sharpe
+    method: risk_parity
     lookbacks: [63, 126, 252]
     weights: [0.5, 0.3, 0.2]
     cooldown_days: 21
@@ -47,6 +66,8 @@ risk:
   dd_derisk_scale: 0.5
   dust_threshold_usd: 3.0
   daily_loss_circuit_breaker_pct: 5.0
+  trail_dd_halt_pct: 15.0
+  trail_dd_resume_factor: 0.5  # resume when drawdown shrinks below 50% of halt threshold
   use_leverage: false
   max_gross_exposure: 1.0
   kill_switch_file: KILL_SWITCH
@@ -56,9 +77,18 @@ schedule:
   market_hours_only: true
   rebalance_day: last_business_day
 
+execution:
+  # In live trading, only submit new orders within N minutes after the market open
+  open_window_minutes: 10
+
 slippage:
   bps: 3
   commission_per_share: 0.0
+  # Optional: per-asset bps overrides (e.g., higher for single stocks)
+  per_asset_bps:
+    AAPL: 8
+    MSFT: 6
+    GOOGL: 8
 
 notifier:
   discord_webhook: ""

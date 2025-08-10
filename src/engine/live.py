@@ -46,6 +46,7 @@ class LiveContext:
     last_pdt_reset_date: Optional[str] = None
     circuit_breaker_active: bool = False
     daily_pnl_start_equity: Optional[float] = None
+    peak_equity: Optional[float] = None
 
 
 def check_market_open(timezone: str = "America/New_York") -> bool:
@@ -110,6 +111,24 @@ def check_circuit_breakers(ctx: LiveContext, current_equity: float, cfg: dict) -
         logger.info("Circuit breaker reset - losses recovered")
         ctx.circuit_breaker_active = False
     
+    # Trailing max drawdown halt (across sessions)
+    if ctx.peak_equity is None:
+        ctx.peak_equity = current_equity
+    ctx.peak_equity = max(ctx.peak_equity, current_equity)
+    trail_dd = (current_equity - ctx.peak_equity) / ctx.peak_equity
+    dd_halt = -abs(float(cfg["risk"].get("trail_dd_halt_pct", 999.0))) / 100.0
+    dd_resume_factor = float(cfg["risk"].get("trail_dd_resume_factor", 0.5))
+    if dd_halt > -0.01:  # effectively disabled unless set
+        pass
+    else:
+        if trail_dd <= dd_halt:
+            if not ctx.circuit_breaker_active:
+                logger.critical(f"TRAILING DD HALT: Drawdown {trail_dd:.2%} <= {dd_halt:.2%}")
+            ctx.circuit_breaker_active = True
+        elif ctx.circuit_breaker_active and trail_dd > dd_halt * dd_resume_factor:
+            logger.info("Trailing DD circuit reset - equity recovered sufficiently")
+            ctx.circuit_breaker_active = False
+
     return ctx.circuit_breaker_active
 
 
@@ -256,8 +275,27 @@ def run_live_loop() -> None:
                 logger.error(f"Failed to get live prices: {e}")
                 live_prices = close.iloc[-1]
             
+            # Respect execution window near open if configured
+            try:
+                open_win = int(cfg.get("execution", {}).get("open_window_minutes", 0))
+                if open_win > 0:
+                    nyse = mcal.get_calendar('NYSE')
+                    now = pd.Timestamp.now(tz=cfg.get("timezone", "America/New_York"))
+                    sched = nyse.schedule(start_date=now.date(), end_date=now.date())
+                    if not sched.empty:
+                        m_open = sched.iloc[0]['market_open'].tz_convert(cfg.get("timezone", "America/New_York"))
+                        m_close = sched.iloc[0]['market_close'].tz_convert(cfg.get("timezone", "America/New_York"))
+                        minutes_since_open = (now - m_open).total_seconds() / 60.0
+                        if minutes_since_open < 0 or minutes_since_open > open_win:
+                            logger.debug("Outside open execution window, skipping orders this cycle")
+                            time.sleep(int(cfg["schedule"]["check_interval_seconds"]))
+                            continue
+            except Exception:
+                pass
+
             # Compute strategy weights
             w_all = []
+            stock_close = pd.DataFrame(index=close.index)
             
             if cfg["strategies"]["vm_dual_momentum"]["enabled"]:
                 try:
@@ -288,13 +326,22 @@ def run_live_loop() -> None:
             if cfg["strategies"]["qv_trend"]["enabled"]:
                 try:
                     large = pd.read_csv(project_root() / cfg["universe"]["large_cap_csv"])['Ticker'].tolist()
-                    if large:
+                    qv_use_proxies = bool(cfg["strategies"]["qv_trend"].get("use_etf_proxies", False))
+                    qv_proxies = [t for t in cfg["strategies"]["qv_trend"].get("proxies", []) or []]
+                    qv_cfg = QVConfig(
+                        top_n=cfg["strategies"]["qv_trend"]["top_n"],
+                        rebalance=cfg["strategies"]["qv_trend"]["rebalance"]
+                    )
+                    if qv_use_proxies and qv_proxies:
+                        px_proxies = fetch_yf_ohlcv(qv_proxies)
+                        proxies_close = px_proxies.close.dropna(how="all")
+                        all_prices_for_qv = pd.concat([proxies_close, close.reindex(columns=["BIL"])], axis=1)
+                        w_qv = qv_weights(all_prices_for_qv, qv_cfg, universe=qv_proxies)
+                        w_all.append(("qv_trend", w_qv))
+                        logger.debug("QV-Trend (proxies) weights computed")
+                    elif large:
                         stock_px = fetch_yf_ohlcv(large[:50])  # Limit to avoid timeouts
                         stock_close = stock_px.close.dropna(how="all")
-                        qv_cfg = QVConfig(
-                            top_n=cfg["strategies"]["qv_trend"]["top_n"],
-                            rebalance=cfg["strategies"]["qv_trend"]["rebalance"]
-                        )
                         all_prices_for_qv = pd.concat([stock_close, close.reindex(columns=["BIL"])], axis=1)
                         w_qv = qv_weights(all_prices_for_qv, qv_cfg, universe=large)
                         w_all.append(("qv_trend", w_qv))
@@ -315,28 +362,35 @@ def run_live_loop() -> None:
             strat_weights = {}
             for name, w in w_all:
                 aligned_w = w.shift(1).reindex(open_.index).fillna(0.0)
-                # Ensure all ETF columns are present
-                aligned_w = aligned_w.reindex(columns=close.columns, fill_value=0.0)
+                # Preserve each strategy's native columns (ETFs or stocks)
                 strat_weights[name] = aligned_w
             
             # Meta-allocator ensemble
             if meta and len(strat_weights) > 1:
                 try:
-                    # Compute per-strategy returns
+                    # Compute per-strategy returns on a combined panel (ETFs + any stocks from QV)
+                    combined_close = pd.concat([
+                        close,
+                        stock_close.reindex(index=close.index)
+                    ], axis=1)
+                    combined_close = combined_close.loc[:, ~combined_close.columns.duplicated()]
+                    combined_rets = combined_close.pct_change().fillna(0.0)
+
                     per_strat_returns = {}
                     for name, w in strat_weights.items():
-                        strat_rets = (w * rets.reindex_like(w).fillna(0.0)).sum(axis=1)
+                        strat_rets = (w.reindex(columns=combined_rets.columns, fill_value=0.0) * combined_rets.reindex_like(w).fillna(0.0)).sum(axis=1)
                         per_strat_returns[name] = strat_rets.iloc[:-1]  # Exclude today
                     
                     # Get meta weights
                     current_date = open_.index[-1]
                     meta_weights = meta.step(current_date, per_strat_returns, close)
                     
-                    # Blend strategies
-                    comp_w = pd.DataFrame(0.0, index=open_.index, columns=close.columns)
+                    # Blend strategies across union of symbols
+                    all_cols = sorted(set().union(*[set(w.columns) for w in strat_weights.values()]))
+                    comp_w = pd.DataFrame(0.0, index=open_.index, columns=all_cols)
                     for name, w in strat_weights.items():
                         weight = float(meta_weights.get(name, 0.0))
-                        comp_w = comp_w.add(w.mul(weight), fill_value=0.0)
+                        comp_w = comp_w.add(w.reindex(columns=all_cols).mul(weight), fill_value=0.0)
                         
                     logger.info(f"Meta-allocator weights: {meta_weights}")
                     
@@ -344,11 +398,27 @@ def run_live_loop() -> None:
                     logger.error(f"Meta-allocator failed: {e}, using equal weights")
                     comp_w = sum(w for _, w in strat_weights.items()) / len(strat_weights)
             else:
-                # Equal weight blend
-                comp_w = sum(w for _, w in strat_weights.items()) / max(1, len(strat_weights))
+                # Equal weight blend across union of symbols
+                all_cols = sorted(set().union(*[set(w.columns) for w in strat_weights.values()]))
+                comp_w = pd.DataFrame(0.0, index=open_.index, columns=all_cols)
+                for _, w in strat_weights.items():
+                    comp_w = comp_w.add(w.reindex(columns=all_cols), fill_value=0.0)
+                comp_w = comp_w / max(1, len(strat_weights))
             
             # Get current target allocation
             target = comp_w.iloc[-1].copy()
+
+            # Ensure we have last prices for all target symbols
+            try:
+                missing_syms = [s for s in target.index if s not in live_prices.index]
+                if missing_syms:
+                    extra_prices = get_live_prices(missing_syms, alpaca)
+                    # Fallback to last close if still missing
+                    fallback = close.iloc[-1].reindex(missing_syms).fillna(method=None)
+                    extra_prices = extra_prices.combine_first(fallback)
+                    live_prices = live_prices.combine_first(extra_prices)
+            except Exception:
+                pass
             
             # Apply risk overlays
             risk = cfg["risk"]
@@ -369,7 +439,11 @@ def run_live_loop() -> None:
             
             # 4. Volatility targeting (live overlay matching backtest behavior)
             try:
-                base_port_ret = (comp_w.fillna(0.0) * rets.reindex_like(comp_w).fillna(0.0)).sum(axis=1)
+                # Build combined returns panel for vol targeting as well
+                combined_close = pd.concat([close, stock_close.reindex(index=close.index)], axis=1)
+                combined_close = combined_close.loc[:, ~combined_close.columns.duplicated()]
+                combined_rets = combined_close.pct_change().fillna(0.0)
+                base_port_ret = (comp_w.fillna(0.0) * combined_rets.reindex_like(comp_w).fillna(0.0)).sum(axis=1)
                 target_vol = float(risk["target_vol_annual"])
                 scale = scale_to_target_vol(base_port_ret.tail(60), target_vol, window=20)
                 target = target * scale
