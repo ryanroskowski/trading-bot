@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import time
 import random
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -93,9 +94,18 @@ def fetch_yf_ohlcv_direct_api(tickers: List[str], start: str = "2005-01-01", end
             else:
                 adj_closes = closes
             
-            # Create series, handling None values
-            open_series = pd.Series(opens, index=dates).dropna()
-            close_series = pd.Series(adj_closes, index=dates).dropna()
+            # Create raw series
+            open_raw = pd.Series(opens, index=dates).astype(float)
+            close_raw = pd.Series(closes, index=dates).astype(float)
+            adj_close = pd.Series(adj_closes, index=dates).astype(float)
+
+            # Adjust open to be consistent with adjusted close to avoid spurious open-to-close returns
+            # factor = adj_close / close_raw; adj_open = open_raw * factor
+            with pd.option_context('mode.use_inf_as_na', True):
+                factor = (adj_close / close_raw).replace([np.inf, -np.inf], np.nan)
+            open_adj = (open_raw * factor).dropna()
+            close_series = adj_close.dropna()
+            open_series = open_adj.align(close_series, join='inner')[0]
             
             if len(open_series) > 0 and len(close_series) > 0:
                 all_open_data[ticker] = open_series
@@ -165,9 +175,15 @@ def fetch_yf_ohlcv(tickers: List[str], start: str = "2005-01-01", end: Optional[
                         else:
                             continue
                     
-                    if 'Adj Close' in df.columns and 'Open' in df.columns:
-                        close_series = df["Adj Close"].dropna()
-                        open_series = df["Open"].dropna()
+                    if 'Adj Close' in df.columns and 'Open' in df.columns and 'Close' in df.columns:
+                        # Adjust open by same factor as close adjustment to ensure consistency
+                        close_series = df["Adj Close"].astype(float)
+                        factor = (df["Adj Close"].astype(float) / df["Close"].astype(float)).replace([np.inf, -np.inf], np.nan)
+                        open_series = (df["Open"].astype(float) * factor)
+                        # Drop rows where either side is NaN
+                        aligned = pd.concat([open_series, close_series], axis=1, join='inner').dropna()
+                        open_series = aligned.iloc[:, 0]
+                        close_series = aligned.iloc[:, 1]
                         
                         if len(close_series) > 0 and len(open_series) > 0:
                             frames_close[t] = close_series.rename(t)

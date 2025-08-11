@@ -57,12 +57,12 @@ ensemble:
     blend_top_k: 2
 
 risk:
-  max_total_allocation_pct: 0.60
+  max_total_allocation_pct: 1.20
   per_trade_cap_usd: 5000
   max_positions_total: 12
   allow_fractional: true
-  target_vol_annual: 0.10
-  dd_derisk_threshold_pct: 10
+  target_vol_annual: 0.12
+  dd_derisk_threshold_pct: 12
   dd_derisk_scale: 0.5
   dust_threshold_usd: 3.0
   daily_loss_circuit_breaker_pct: 5.0

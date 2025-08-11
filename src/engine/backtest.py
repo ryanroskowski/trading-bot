@@ -141,7 +141,9 @@ def run_backtest(cfg_path: str | None = None) -> BacktestResult:
 
     # Align to open for next-bar execution
     def shift_to_open(w: pd.DataFrame) -> pd.DataFrame:
-        return w.shift(1).reindex(open_.index).fillna(0.0)
+        # Forward-fill onto the open index so weights persist between rebalances,
+        # then shift by one bar to enforce next-open execution without lookahead.
+        return w.reindex(open_.index, method="ffill").shift(1).fillna(0.0)
 
     w_vm_o = shift_to_open(w_vm)
     w_ts_o = shift_to_open(w_ts)
